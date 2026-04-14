@@ -11,6 +11,7 @@ const MODEL_ID = 'onnx-community/gemma-4-E2B-it-ONNX';
 
 let processor = null;
 let model = null;
+let modelDevice = null; // 'webgpu' | 'wasm'
 
 function onProgress(info) {
   if (info.status === 'progress') {
@@ -18,6 +19,25 @@ function onProgress(info) {
   } else if (info.status === 'done') {
     self.postMessage({ type: 'file_done', file: info.file });
   }
+}
+
+async function probeWebGPU() {
+  const prompt = processor.apply_chat_template(
+    [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
+    { enable_thinking: false, add_generation_prompt: true },
+  );
+  const inputs = await processor(prompt, null, null, { add_special_tokens: false });
+  await model.generate({ ...inputs, max_new_tokens: 1, do_sample: false });
+}
+
+async function loadWasm() {
+  self.postMessage({ type: 'status', text: '載入模型（WASM 備援）...' });
+  model = await Gemma4ForConditionalGeneration.from_pretrained(MODEL_ID, {
+    dtype: 'q4f16',
+    device: 'wasm',
+    progress_callback: onProgress,
+  });
+  modelDevice = 'wasm';
 }
 
 async function loadModel() {
@@ -33,25 +53,20 @@ async function loadModel() {
       device: 'webgpu',
       progress_callback: onProgress,
     });
+    modelDevice = 'webgpu';
+
+    // Probe to catch devices where WebGPU loads but inference fails
+    self.postMessage({ type: 'status', text: '驗證 WebGPU 推理...' });
+    await probeWebGPU();
 
     self.postMessage({ type: 'ready' });
   } catch (err) {
-    // WebGPU failed — retry with WASM
-    if (!model) {
-      console.warn('WebGPU failed, falling back to WASM:', err.message);
-      try {
-        self.postMessage({ type: 'status', text: '載入模型（WASM 備援）...' });
-        model = await Gemma4ForConditionalGeneration.from_pretrained(MODEL_ID, {
-          dtype: 'q4f16',
-          device: 'wasm',
-          progress_callback: onProgress,
-        });
-        self.postMessage({ type: 'ready' });
-      } catch (err2) {
-        self.postMessage({ type: 'error', message: err2.message });
-      }
-    } else {
-      self.postMessage({ type: 'error', message: err.message });
+    console.warn('WebGPU failed, falling back to WASM:', err.message);
+    try {
+      await loadWasm();
+      self.postMessage({ type: 'ready' });
+    } catch (err2) {
+      self.postMessage({ type: 'load_failed', message: err2.message });
     }
   }
 }
