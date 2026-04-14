@@ -21,17 +21,10 @@ function onProgress(info) {
   }
 }
 
-async function probeWebGPU() {
-  const prompt = processor.apply_chat_template(
-    [{ role: 'user', content: [{ type: 'text', text: 'hi' }] }],
-    { enable_thinking: false, add_generation_prompt: true },
-  );
-  const inputs = await processor(prompt, null, null, { add_special_tokens: false });
-  await model.generate({ ...inputs, max_new_tokens: 1, do_sample: false });
-}
+const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
 
 async function loadWasm() {
-  self.postMessage({ type: 'status', text: '載入模型（WASM 備援）...' });
+  self.postMessage({ type: 'status', text: '載入模型（WASM）...' });
   model = await Gemma4ForConditionalGeneration.from_pretrained(MODEL_ID, {
     dtype: 'q4f16',
     device: 'wasm',
@@ -47,22 +40,26 @@ async function loadModel() {
       progress_callback: onProgress,
     });
 
-    self.postMessage({ type: 'status', text: '載入模型（WebGPU）...' });
-    model = await Gemma4ForConditionalGeneration.from_pretrained(MODEL_ID, {
-      dtype: 'q4f16',
-      device: 'webgpu',
-      progress_callback: onProgress,
-    });
-    modelDevice = 'webgpu';
-
-    // Probe to catch devices where WebGPU loads but inference fails
-    self.postMessage({ type: 'status', text: '驗證 WebGPU 推理...' });
-    await probeWebGPU();
+    if (isMobile) {
+      // Mobile GPUs often load WebGPU successfully but hang or OOM on inference;
+      // skip WebGPU entirely to avoid loading the model twice.
+      await loadWasm();
+    } else {
+      self.postMessage({ type: 'status', text: '載入模型（WebGPU）...' });
+      model = await Gemma4ForConditionalGeneration.from_pretrained(MODEL_ID, {
+        dtype: 'q4f16',
+        device: 'webgpu',
+        progress_callback: onProgress,
+      });
+      modelDevice = 'webgpu';
+    }
 
     self.postMessage({ type: 'ready' });
   } catch (err) {
-    console.warn('WebGPU failed, falling back to WASM:', err.message);
+    console.warn('載入失敗，切換至 WASM:', err.message);
     try {
+      model?.dispose?.();
+      model = null;
       await loadWasm();
       self.postMessage({ type: 'ready' });
     } catch (err2) {
