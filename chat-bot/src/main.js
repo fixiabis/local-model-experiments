@@ -112,6 +112,28 @@ fileInputEl.addEventListener('change', async () => {
 
 attachClearEl.addEventListener('click', clearAttachment);
 
+// ── Paste image/file into input ────────────────────────────────
+
+inputEl.addEventListener('paste', async (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+
+  for (const item of items) {
+    if (item.kind !== 'file') continue;
+    const file = item.getAsFile();
+    if (!file) continue;
+
+    e.preventDefault();
+    const dataUrl = await readFileAsDataUrl(file);
+    const type = file.type.startsWith('image/') ? 'image' : 'audio';
+    const name = file.name || (file.type.startsWith('image/') ? 'pasted-image.png' : 'pasted-file');
+    pendingAttachment = { type, dataUrl, name };
+    attachNameEl.textContent = name;
+    attachPreviewEl.hidden = false;
+    break;
+  }
+});
+
 // ── Send ──────────────────────────────────────────────────────
 
 function sendMessage() {
